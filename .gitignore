@@ -1,0 +1,32 @@
+# ── 运行时生成，不入库 ──
+__pycache__/
+*.pyc
+logs/
+out/
+
+# ── 历史数据不入库 ──
+# 每天 +250KB，会让仓库无限膨胀；且数据可由脚本重新生成。
+# 但保留一份样本快照作格式参考与离线测试用。
+data/*.json
+data/flows.jsonl
+!data/.gitkeep
+
+# 大幅快照（1.8MB，仅本地离线测试用）
+sample_snapshot.json
+
+# asym / explain 的生成物
+asym/out.html
+explain/out.html
+asym/asym_snapshot.json
+asym/validate_report.json
+asym/robustness_report.json
+prereg_result.json
+validate_report.json
+robustness_report.json
+
+# 系统文件
+.DS_Store
+
+# docs/ 是发布产物，但需要提交（GitHub Pages 从这里读取）
+!docs/
+!docs/**
