@@ -1022,6 +1022,133 @@ def _empty(msg):
     return '<div class="empty">%s</div>' % esc(msg)
 
 
+
+# ══════════════════════════════════════════════════════════════════
+# 给非专业读者的「一分钟看懂」摘要
+#
+# 设计动机：页面原本一上来就是 z 分数、分位、裂口这些术语。
+# 对专业看盘的人是效率，对普通投资者是劝退。
+# 所以最前面必须有一块**不用任何术语**就能读懂的结论，
+# 术语留到下面作为"想深挖再看"的细节。
+# ══════════════════════════════════════════════════════════════════
+
+_REGIME_PLAIN = {
+    "进攻": ("今天市场情绪很热，钱在往里进。",
+             "这种日子追高容易套在短期高点，但也不是不能参与——关键是别把仓位加满。"),
+    "防守": ("今天钱在往外流，跌的多涨的少。",
+             "这种日子别急着抄底。等资金回流的迹象明确一些，再考虑动手。"),
+    "震荡": ("今天市场没什么方向，钱进进出出差不多。",
+             "这种日子最难做，多数人会在里面反复止损。不做也是一种选择。"),
+    "风险": ("今天出现比较极端的资金流出，需要警惕。",
+             "这种日子先保命，别想着赚。已经在场的考虑降低仓位。"),
+}
+
+
+def _plain_verdict(analysis):
+    """生成一句不用术语的结论。返回 (标题, 正文, 建议, 颜色)。"""
+    b = _d(analysis, "breadth_block") or {}
+    reg = _d(analysis, "regime")
+    rlabel = _text(_d(reg, "label"), "")
+    sent = _d(analysis, "sentiment") or {}
+
+    up = _num(_d(b, "up"))
+    down = _num(_d(b, "down"))
+    lu = _num(_d(b, "limit_up"))
+    ld = _num(_d(b, "limit_down"))
+    amt = _num(_d(b, "amount_total"))
+    net = _num(_d(b, "main_net_total"))
+
+    # 核心一句话：涨跌家数 + 钱的方向
+    parts = []
+    if up is not None and down is not None and (up + down) > 0:
+        total = up + down
+        ratio = up / total * 100
+        if ratio >= 70:
+            parts.append(f"今天 {int(total)} 只股票里，{int(up)} 只涨、{int(down)} 只跌——"
+                         f"十只里有七只在涨，是普涨行情")
+        elif ratio >= 55:
+            parts.append(f"今天涨的比跌的多一些（涨 {int(up)} / 跌 {int(down)}）")
+        elif ratio >= 45:
+            parts.append(f"今天涨跌差不多（涨 {int(up)} / 跌 {int(down)}），没什么方向")
+        elif ratio >= 30:
+            parts.append(f"今天跌的比涨的多（涨 {int(up)} / 跌 {int(down)}）")
+        else:
+            parts.append(f"今天大部分股票在跌（涨 {int(up)} / 跌 {int(down)}），"
+                         f"十只里有七只在跌")
+
+    if net is not None:
+        yi = net / 1e8
+        if yi >= 300:
+            parts.append(f"大资金今天净买入 {yi:.0f} 亿，进得比较猛")
+        elif yi >= 50:
+            parts.append(f"大资金今天净买入 {yi:.0f} 亿")
+        elif yi > -50:
+            parts.append(f"大资金今天基本没动（净{'买' if yi >= 0 else '卖'} {abs(yi):.0f} 亿）")
+        elif yi > -300:
+            parts.append(f"大资金今天净卖出 {abs(yi):.0f} 亿")
+        else:
+            parts.append(f"大资金今天净卖出 {abs(yi):.0f} 亿，跑得比较急")
+
+    if lu is not None and ld is not None and lu >= 50:
+        parts.append(f"涨停 {int(lu)} 家，跌停 {int(ld)} 家——"
+                     f"{'赚钱机会明显多一些' if lu > ld * 3 else '多空还有点拉锯'}")
+
+    body = "，".join(parts) + "。" if parts else "今日数据不足，无法给出结论。"
+
+    title, advice, color = "", "", "#8b96a8"
+    if rlabel in _REGIME_PLAIN:
+        title, advice = _REGIME_PLAIN[rlabel]
+        color = {"进攻": "#f6465d", "防守": "#0ecb81",
+                 "震荡": "#f0a020", "风险": "#c0392b"}.get(rlabel, "#8b96a8")
+    else:
+        title = "今天的数据不足以判断市场状态"
+
+    # 成交额补充
+    extra = ""
+    if amt:
+        extra = f"全市场成交 {amt/1e12:.2f} 万亿。"
+
+    return title, body, advice, color, extra
+
+
+def _p0_plain(analysis, snapshot):
+    """页面最顶部：不用术语的一分钟摘要。"""
+    if not isinstance(analysis, dict) or analysis.get("empty_state"):
+        return ""
+    try:
+        title, body, advice, color, extra = _plain_verdict(analysis)
+    except Exception:  # noqa: BLE001
+        return ""
+
+    return (
+        '<div style="margin:0 0 18px;padding:22px 26px;border-radius:14px;'
+        'background:linear-gradient(135deg,rgba(255,255,255,.045),rgba(255,255,255,.015));'
+        'border:1px solid #222b3a;border-left:4px solid ' + color + '">'
+        # 大字结论
+        '<div style="font-size:12px;color:#6b7688;letter-spacing:1px;'
+        'text-transform:uppercase;margin-bottom:8px">今天怎么样（一句话）</div>'
+        '<div style="font-size:20px;font-weight:700;color:' + color + ';'
+        'line-height:1.5;margin-bottom:12px">' + esc(title) + '</div>'
+        # 事实
+        '<div style="font-size:15px;color:#c9d3e0;line-height:1.85;'
+        'margin-bottom:14px">' + esc(body) +
+        ((' <span style="color:#7d8699">' + esc(extra) + '</span>') if extra else '') +
+        '</div>'
+        # 建议
+        '<div style="padding-top:12px;border-top:1px dashed #2a3346;'
+        'font-size:14px;color:#9aa5b8;line-height:1.8">'
+        '<span style="color:#6b7688">这意味什么：</span>' + esc(advice) +
+        '</div>'
+        # 强烈提醒
+        '<div style="margin-top:12px;font-size:12px;color:#6b7688;line-height:1.7">'
+        '以上是<b style="color:#8792a4">对今天数据的描述</b>，不是预测。'
+        '这个工具的预测能力已被自测证伪——它告诉你"今天发生了什么"，'
+        '不告诉你"明天会怎样"。'
+        '</div>'
+        '</div>'
+    )
+
+
 # ---- 面板 1：顶部状态条
 def _p1(analysis, snapshot):
     as_of = _text(_d(analysis, "as_of") or _d(snapshot, "as_of"), DASH)
@@ -1940,6 +2067,9 @@ def render_html(analysis, snapshot):
         )
 
     panels = [
+        # ① 最前面：不用术语的一分钟摘要（给非专业读者）
+        _p0_plain(analysis, snapshot),
+        # ② 以下各面板是专业细节，留给想深挖的人
         _p1(analysis, snapshot),
         _p2(analysis, snapshot),
         _p3(analysis, snapshot),
