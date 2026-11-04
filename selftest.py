@@ -382,6 +382,61 @@ def main():
     except Exception as e:  # noqa: BLE001
         check("历史完整性检查", False, f"{type(e).__name__}: {e}")
 
+    section("3.7 资金主线识别")
+
+    # 核心风险：只看「今日合计流入」会得出"钱在砸向这条链"的乐观结论，
+    # 但若成员中期全为负，真相是"单日回补"，追高风险大。
+    # 这两种情形对判断完全相反，必须能区分。
+    try:
+        import mainline as _ml
+        _snap = None
+        for _fn in sorted(os.listdir(os.path.join(BASE, "data")))[::-1]:
+            if _fn.endswith(".json") and _fn[:4].isdigit():
+                _c = json.load(open(os.path.join(BASE, "data", _fn), encoding="utf-8"))
+                if (_c.get("breadth") or {}).get("amount_total"):
+                    _snap = _c
+                    break
+        if _snap:
+            _a = metrics.compute(_snap)
+            _res = _ml.detect(_a, _snap)
+            check("资金主线可识别", _res.get("available"),
+                  f"{len(_res.get('lines') or [])} 条主线")
+            _lines = _res.get("lines") or []
+            if _lines:
+                _top = _lines[0]
+                check("主线含成员明细", len(_top.get("members") or []) >= 3,
+                      f"{len(_top.get('members') or [])} 个成员")
+                check("主线标注性质（回补/建仓）",
+                      _top.get("nature") in ("rebound", "genuine", "mixed"),
+                      f"nature={_top.get('nature')} ({_top.get('nature_txt')})")
+                # 类型判定必须与数据自洽
+                _n = _top.get("member_count") or 0
+                _pos = _top.get("d10_pos_count") or 0
+                if _top.get("nature") == "rebound":
+                    check("回补判定与成员数据自洽", _pos <= _n * 0.34,
+                          f"{_pos}/{_n} 个 10 日为正")
+                # 大白话必须体现性质差异
+                _ps = _ml.plain_summary(_res)
+                if _ps and _top.get("nature") == "rebound":
+                    check("回补情形的大白话含警示",
+                          "回补" in _ps and ("追高" in _ps or "警惕" in _ps),
+                          "已提示回补风险")
+            # 无 markdown 泄漏
+            _ps2 = _ml.plain_summary(_res) or ""
+            check("主线文案无 markdown 星号", "**" not in _ps2,
+                  "已清理")
+            # 限制必须声明「非真实产业链」
+            _lims = _res.get("limitations") or []
+            check("声明确非产业链图谱",
+                  any("产业链" in str(x) for x in _lims),
+                  "已标注")
+        else:
+            check("有可用快照", False, "data/ 下无完整快照")
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        check("资金主线识别", False, f"{type(e).__name__}: {e}")
+
     section("4. 渲染层")
 
     try:

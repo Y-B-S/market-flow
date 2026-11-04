@@ -1139,12 +1139,67 @@ def _p0_plain(analysis, snapshot):
         'font-size:14px;color:#9aa5b8;line-height:1.8">'
         '<span style="color:#6b7688">这意味什么：</span>' + esc(advice) +
         '</div>'
+        + _mainline_block(analysis)
         # 强烈提醒
-        '<div style="margin-top:12px;font-size:12px;color:#6b7688;line-height:1.7">'
+        + '<div style="margin-top:12px;font-size:12px;color:#6b7688;line-height:1.7">'
         '以上是<b style="color:#8792a4">对今天数据的描述</b>，不是预测。'
         '这个工具的预测能力已被自测证伪——它告诉你"今天发生了什么"，'
         '不告诉你"明天会怎样"。'
         '</div>'
+        '</div>'
+    )
+
+
+def _mainline_block(analysis):
+    """「今天钱砸向哪条链」区块。
+
+    这是「数据展示」之外唯一直接给出判断的部分，所以措辞要格外小心：
+    必须区分「持续流入」与「单日回补」，否则会误导。
+    """
+    try:
+        import mainline as _ml
+        res = _ml.detect(analysis)
+        txt = _ml.plain_summary(res)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not txt:
+        return ""
+
+    lines = res.get("lines") or []
+    top = lines[0] if lines else {}
+    nature = top.get("nature")
+    # 回补用警示色，真流入用普通色
+    accent = {"rebound": "#f0a020", "genuine": "#f6465d",
+              "mixed": "#8b96a8"}.get(nature, "#8b96a8")
+    label = {"rebound": "今天钱砸向哪条链（注意：是回补，不是建仓）",
+             "genuine": "今天钱持续买向哪条链",
+             "mixed": "今天钱集中在哪条链"}.get(nature, "今天钱砸向哪条链")
+
+    paras = [p for p in txt.split("\n\n") if p.strip()]
+    body = "".join(
+        '<div style="margin-bottom:8px">' + esc(x) + '</div>' for x in paras)
+
+    # 成员明细（前 8 个）
+    mem = top.get("members") or []
+    chips = []
+    for m in mem[:8]:
+        chips.append(
+            '<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;'
+            'border-radius:5px;background:rgba(255,255,255,.05);font-size:11.5px;'
+            'color:#9aa5b8">' + esc(m["name"]) +
+            ' <span style="color:#6b7688">' + f"{m['net_yi']:+.0f}亿" + '</span></span>')
+    chip_html = "".join(chips)
+    more = ""
+    if len(mem) > 8:
+        more = ('<span style="font-size:11.5px;color:#6b7688">'
+                f'另有 {len(mem)-8} 个</span>')
+
+    return (
+        '<div style="margin-top:16px;padding-top:14px;border-top:1px dashed #2a3346">'
+        f'<div style="font-size:12px;color:{accent};letter-spacing:.5px;'
+        'margin-bottom:9px;font-weight:650">' + esc(label) + '</div>'
+        f'<div style="font-size:14px;color:#c9d3e0;line-height:1.85">{body}</div>'
+        f'<div style="margin-top:10px">{chip_html}{more}</div>'
         '</div>'
     )
 
