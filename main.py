@@ -88,6 +88,16 @@ def main(argv=None):
         print("⚠ 模块缺失: " + "; ".join(errs), file=sys.stderr)
     analysis = build_analysis(snap, mods)
 
+    # 2.5) 长期摘要（接口只留 120 交易日，今天的摘要不存就永久消失）
+    try:
+        import bars
+        if not (analysis or {}).get("empty_state"):
+            row = bars.summarize(snap, analysis)
+            n = bars.append(row)
+            print(f"· 已记录长期摘要 data/bars.jsonl（共 {n} 天）")
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠ 长期摘要写入失败: {type(e).__name__}: {e}", file=sys.stderr)
+
     # 3) 渲染
     rc = 0
     if not args.html_only:

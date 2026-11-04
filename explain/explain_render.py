@@ -298,17 +298,47 @@ if __name__ == "__main__":
     HERE = os.path.dirname(os.path.abspath(__file__))
     ROOT = os.path.dirname(HERE)
     sys.path.insert(0, ROOT)
+
+def _latest_snapshot():
+    """取 data/ 下最新的、含完整宽度数据的快照。
+
+    ⚠️ 早期这里硬编码了 "2026-11-03.json"。该快照后因数据错误被删除，
+    模块直接失效 —— 硬编码日期是测试与演示代码的典型反模式，
+    每天的数据都会变，写死等于定时炸弹。
+    """
+    import glob
+    cands = sorted(glob.glob(os.path.join(ROOT, "data", "2*.json")))[::-1]
+    for p in cands:
+        try:
+            s = json.load(open(p, encoding="utf-8"))
+            if (s.get("breadth") or {}).get("amount_total"):
+                return s
+        except Exception:
+            continue
+    # 退而求其次：任取最后一个
+    for p in cands:
+        try:
+            return json.load(open(p, encoding="utf-8"))
+        except Exception:
+            continue
+    return None
+
+
+if __name__ == "__main__":
     sys.path.insert(0, HERE)
     import explain_fetch as F
     import explain_metrics as M
     import metrics
 
-    snap = json.load(open(os.path.join(ROOT, "data", "2026-11-03.json"), encoding="utf-8"))
+    snap = _latest_snapshot()
+    if snap is None:
+        raise SystemExit("无可用快照，请先运行 python3 main.py")
+    as_of = snap["as_of"]
     a0 = metrics.compute(snap)
     div = (a0.get("divergence_gated") or [])[:8]
     boards_meta = [(d.get("code"), d.get("name")) for d in div]
     names = [d["name"] for d in div]
-    data = F.fetch_all(names, boards=boards_meta, as_of="2026-11-03")
+    data = F.fetch_all(names, boards=boards_meta, as_of=as_of)
     res = M.compute(div, data)
     html = render_html(res)
     out = os.path.join(HERE, "out.html")

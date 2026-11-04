@@ -15,6 +15,30 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
+
+def _latest_snapshot():
+    """取 data/ 下最新的、含完整宽度数据的快照。
+
+    ⚠️ 早期这里硬编码了 "2026-11-03.json"。该快照后因数据错误被删除，
+    模块直接失效 —— 硬编码日期是测试与演示代码的典型反模式，
+    每天的数据都会变，写死等于定时炸弹。
+    """
+    import glob
+    cands = sorted(glob.glob(os.path.join(ROOT, "data", "2*.json")))[::-1]
+    for p in cands:
+        try:
+            s = json.load(open(p, encoding="utf-8"))
+            if (s.get("breadth") or {}).get("amount_total"):
+                return s
+        except Exception:
+            continue
+    # 退而求其次：任取最后一个
+    for p in cands:
+        try:
+            return json.load(open(p, encoding="utf-8"))
+        except Exception:
+            continue
+    return None
 sys.path.insert(0, HERE)
 
 PASS, FAIL = [], []
@@ -135,20 +159,20 @@ def main():
     # ── 3. 端到端 ──
     section("3. 端到端：真实背离样本")
 
-    snap_path = os.path.join(ROOT, "data", "2026-11-03.json")
-    if not os.path.exists(snap_path):
-        check("本地快照存在", False, snap_path)
+    snap = _latest_snapshot()
+    if snap is None:
+        check("本地快照存在", False, "data/ 下无可用快照")
         return report()
+    snap_path = os.path.join(ROOT, "data", f"{snap['as_of']}.json")
 
     try:
         import metrics
-        snap = json.load(open(snap_path, encoding="utf-8"))
         a0 = metrics.compute(snap)
         div = (a0.get("divergence_gated") or [])[:4]
         names = [d["name"] for d in div]
         boards = [(d.get("code"), d.get("name")) for d in div]
 
-        data = F.fetch_all(names, boards=boards, as_of="2026-11-03")
+        data = F.fetch_all(names, boards=boards, as_of=snap["as_of"])
         res = M.compute(div, data)
 
         check("生成卡片数量正确", len(res["cards"]) == len(div),
