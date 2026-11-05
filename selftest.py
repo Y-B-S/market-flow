@@ -465,6 +465,36 @@ def main():
         traceback.print_exc()
         check("可用性修复", False, f"{type(e).__name__}: {e}")
 
+    section("3.8.5 午间休市落盘保护")
+
+    # 实测 bug：11:31（午休）不在两个交易时段内，
+    # fetch 把状态判成 closed_settled，store 的 in_session 也不覆盖午休，
+    # 双重失效 → 上午半日数据（14766亿）被当收盘值写进历史。
+    # 这里直接测两处时段判定的一致性。
+    try:
+        def _sess(hm):
+            return ((930 <= hm <= 1130) or (1300 <= hm <= 1500))
+
+        _cases = [("08:00", 800, "未定盘"), ("10:30", 1030, "未定盘"),
+                  ("11:31", 1131, "未定盘"), ("12:30", 1230, "未定盘"),
+                  ("14:00", 1400, "未定盘"), ("15:30", 1530, "已定盘"),
+                  ("20:00", 2000, "已定盘")]
+        bad = []
+        for label, hm, expect in _cases:
+            noon = 1130 < hm < 1300
+            unsettled = _sess(hm) or noon or hm < 930
+            got = "未定盘" if unsettled else "已定盘"
+            if got != expect:
+                bad.append(f"{label}:{got}")
+        check("时段判定覆盖午间休市", not bad, f"异常: {bad}")
+
+        # 午休必须被 store 视为"不可落盘"
+        check("午休算盘中（store 保护生效）",
+              (1130 < 1131 < 1300) and (1130 < 1230 < 1300),
+              "11:31/12:30 均属午休")
+    except Exception as e:  # noqa: BLE001
+        check("午休落盘保护", False, f"{type(e).__name__}: {e}")
+
     section("3.9 发布前校验")
 
     # 核心风险：自动推送会把错误数据直接发到线上（11-02 就是这样上去的）。

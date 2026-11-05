@@ -51,12 +51,16 @@ def save(snap, allow_intraday=False):
         cst = timezone(timedelta(hours=8))
         now = datetime.now(cst)
         hhmm = now.hour * 100 + now.minute
-        # A 股连续竞价 09:30-11:30、13:00-15:00（含集合竞价与收盘集合竞价）
-        in_session = (930 <= hhmm <= 1130) or (1300 <= hhmm <= 1500)
+        # ⚠️ 必须覆盖**午间休市**（11:30-13:00）：上午行情已固定但下午还有交易，
+        # 全天未完成，此时落盘会把半日数据当收盘值写进历史。
+        # 实测 bug：11:31 落在两个交易时段之外，保护失效，
+        # 上午的 14766 亿被写成"收盘"（真实约 2 万亿）。
+        in_session = ((930 <= hhmm <= 1130) or (1300 <= hhmm <= 1500))
+        noon_break = 1130 < hhmm < 1300
         amt = (snap.get("breadth") or {}).get("amount_total")
-        # 盘中状态既看时钟，也看数据自报的状态（兼容新旧命名）
+        # 盘中/午休都算"未定盘"
         _live_states = {"in_session", "trading"}
-        if in_session and amt and (ts in _live_states or ts is None):
+        if (in_session or noon_break) and amt and (ts in _live_states or ts is None):
             return None
 
     _ensure_dir()

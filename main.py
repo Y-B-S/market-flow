@@ -78,8 +78,13 @@ def main(argv=None):
             print(f"· 退回本地快照 {fallback['as_of']}", file=sys.stderr)
             snap = fallback
         if not args.date:
-            store.save(snap)
-            print(f"· 已保存 data/{snap['as_of']}.json 并追加时序")
+            _p = store.save(snap)
+            if _p is None:
+                # 盘中/非交易时段被落盘保护拒绝（避免半日数据覆盖收盘值）
+                print("· 未保存快照（盘中数据，避免污染历史；收盘后重跑即可）",
+                      file=sys.stderr)
+            else:
+                print(f"· 已保存 data/{snap['as_of']}.json 并追加时序")
 
     # 2) 计算
     mods = _load_modules()
@@ -89,12 +94,22 @@ def main(argv=None):
     analysis = build_analysis(snap, mods)
 
     # 2.5) 长期摘要（接口只留 120 交易日，今天的摘要不存就永久消失）
+    #
+    # ⚠️ 必须与落盘保持一致：盘中若快照被拒绝保存（避免半日数据污染），
+    # 摘要同样不能写 —— 否则 bars.jsonl 会混入半日数据。
+    # 实测曾发生：11:28 采集时 11-05 的半日成交额（14765亿）被写进摘要，
+    # 而当日收盘值约 2 万亿，历史会被永久污染。
     try:
         import bars
-        if not (analysis or {}).get("empty_state"):
+        _saved = os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                             "data", f"{snap.get('as_of')}.json"))
+        if _saved and not (analysis or {}).get("empty_state"):
             row = bars.summarize(snap, analysis)
             n = bars.append(row)
             print(f"· 已记录长期摘要 data/bars.jsonl（共 {n} 天）")
+        elif not _saved:
+            print("· 未记录长期摘要（快照未落盘，避免写入半日数据）",
+                  file=sys.stderr)
     except Exception as e:  # noqa: BLE001
         print(f"⚠ 长期摘要写入失败: {type(e).__name__}: {e}", file=sys.stderr)
 

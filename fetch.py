@@ -440,8 +440,20 @@ def fetch_all(as_of=None, workers=8):
     # 实测 17:46 收盘后跑，数据完整却仍标 trading —— 状态名不准确会误导下游
     # （落盘保护要靠它判断是否盘中，名字错了保护就失效）。
     _now_hm = datetime.now(CST).hour * 100 + datetime.now(CST).minute
+    # ⚠️ 判定"是否已定盘"必须覆盖**午间休市**：11:30-13:00 上午行情已固定
+    # 但下午还有交易，全天数据未完成，绝不能标成 closed_settled。
+    # 实测 bug：11:31 落在 11:30 之后被判为 closed_settled，
+    # 导致落盘保护失效，把上午半日数据（14766亿）当成收盘值写进了历史。
     _in_session = ((930 <= _now_hm <= 1130) or (1300 <= _now_hm <= 1500))
-    trading_state = "in_session" if _in_session else "closed_settled"
+    _noon_break = 1130 < _now_hm < 1300
+    _before_open = _now_hm < 930
+    _after_close_settled = _now_hm >= 1500
+    if _in_session or _noon_break or _before_open:
+        # 盘中 / 午休 / 盘前：当日未定盘
+        trading_state = "in_session" if (_in_session or _noon_break) else "pre_market_or_closed"
+    else:
+        # 15:00 之后（含 15:00-15:15 未完全定盘、以及之后）
+        trading_state = "closed_settled"
     chg_valid = sum(1 for c in chgs if c != 0)
     # 判据要用"个股总数"而非 valid：盘前 f3 为 "-"，num() 转成 None 后
     # valid 会变成 0，光看 valid 判不出来。真正信号是"有效涨跌幅几乎为零"。
