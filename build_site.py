@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date as _date, datetime as _dt
+import re
 import shutil
 import sys
 import time
@@ -26,8 +28,13 @@ DOCS = os.path.join(HERE, "docs")
 ARCHIVE_KEEP = 30
 
 
-def _nav(active):
-    """三页共用的导航条。"""
+def _nav(active, as_of=None, days=None):
+    """三页共用的导航条。
+
+    ⚠️ 可用性教训：原导航条只有三个页面链接，没有日期、没有历史入口。
+    用户打开后第一反应是「这是哪天的？之前的数据怎么看？」——
+    这两件事必须一眼可见，所以日期做成醒目的徽章，历史做成常驻入口。
+    """
     items = [("index.html", "资金流动大盘", "flow"),
              ("asym.html", "信息不对称", "asym"),
              ("explain.html", "背离解释器", "explain")]
@@ -35,9 +42,25 @@ def _nav(active):
     for href, label, key in items:
         cls = ' class="on"' if key == active else ""
         links.append(f'<a href="{href}"{cls}>{label}</a>')
+
+    # 日期徽章（大、彩色、永远在导航条右侧）
+    date_badge = ""
+    if as_of:
+        date_badge = (f'<span class="datebadge">{as_of}</span>')
+
+    # 历史入口
+    hist = ""
+    if days:
+        hist = (f'<a href="archive/" class="hist">'
+                f'历史归档 <span class="cnt">{len(days)}</span></a>')
+    else:
+        hist = '<a href="archive/" class="hist">历史归档</a>'
+
     return ('<nav class="sitebar">'
             '<span class="brand">A股研究工具</span>'
             + "".join(links) +
+            '<span class="spacer"></span>'
+            + hist + date_badge +
             '</nav>')
 
 
@@ -51,19 +74,79 @@ NAV_CSS = """
  transition:.15s}
 .sitebar a:hover{color:#e8eef7;background:rgba(255,255,255,.05)}
 .sitebar a.on{color:#fff;background:rgba(59,130,246,.22);font-weight:650}
+.sitebar .spacer{flex:1 1 auto}
+.sitebar .hist{font-size:12.5px;color:#a8b3c4}
+.sitebar .hist .cnt{color:#6b7688;font-size:11px}
+.datebadge{font-size:13.5px;font-weight:700;color:#fff;
+ background:rgba(59,130,246,.30);border:1px solid rgba(59,130,246,.55);
+ border-radius:7px;padding:4px 12px;letter-spacing:.5px;
+ font-variant-numeric:tabular-nums}
 body{padding-top:0 !important}
 """
 
 
-def _inject(html, active):
+def _freshness(as_of):
+    """数据新鲜度提示。
+
+    可用性教训：页面上的日期只是灰色小字，用户看不出「这已经是昨天的数据了」。
+    股票数据差一天，结论可能完全相反，所以必须显式提示。
+    """
+    if not as_of:
+        return ""
+    try:
+        d = _dt.strptime(as_of, "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+    today = _date.today()
+    gap = (today - d).days
+
+    if gap <= 0:
+        return ""
+    if gap == 1:
+        txt = "这是<b>上一个交易日</b>的数据（今天收盘后会自动更新）"
+        bg, bd, fg = "rgba(240,160,32,.10)", "rgba(240,160,32,.4)", "#e8d3a8"
+    else:
+        txt = (f"这是 <b>{gap} 天前</b> 的数据，"
+               f"最近可能没有运行采集或未推送")
+        bg, bd, fg = "rgba(200,60,50,.12)", "rgba(200,60,50,.45)", "#f0b8b0"
+
+    return (f'<div style="margin:0 0 14px;padding:10px 16px;border-radius:8px;'
+            f'background:{bg};border:1px solid {bd};color:{fg};font-size:12.5px;'
+            f'line-height:1.7">数据新鲜度：{txt}</div>')
+
+
+def _inject(html, active, as_of=None, days=None):
     """把导航条与样式注入页面（页面本身是自包含的，只加导航）。"""
-    nav = _nav(active)
-    inject = f"<style>{NAV_CSS}</style>{nav}"
+    nav = _nav(active, as_of=as_of, days=days)
+    inject = f"<style>{NAV_CSS}</style>{nav}{_freshness(as_of)}"
     # 插到 <body> 之后
     for marker in ("<body>", "<body >"):
         if marker in html:
             return html.replace(marker, marker + inject, 1)
     return inject + html
+
+
+def _snap_dates():
+    """data/ 下所有有完整宽度数据的快照日期（用于导航条计数）。"""
+    d = os.path.join(HERE, "data")
+    out = []
+    if os.path.isdir(d):
+        for fn in sorted(os.listdir(d)):
+            if not (fn.endswith(".json") and fn[:4].isdigit()):
+                continue
+            try:
+                s0 = json.load(open(os.path.join(d, fn), encoding="utf-8"))
+                if (s0.get("breadth") or {}).get("amount_total"):
+                    out.append(s0.get("as_of") or fn[:-5])
+            except Exception:  # noqa: BLE001
+                continue
+    return out
+
+
+def _extract_date(html):
+    """从页面内容提取交易日（形如 2026-11-04）。"""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", html)
+    return m.group(1) if m else None
 
 
 def build():
@@ -78,7 +161,7 @@ def build():
     if os.path.exists(src):
         html = open(src, encoding="utf-8").read()
         with open(os.path.join(DOCS, "index.html"), "w", encoding="utf-8") as f:
-            f.write(_inject(html, "flow"))
+            f.write(_inject(html, "flow", as_of=_extract_date(html), days=_snap_dates()))
         built.append(("index.html", len(html)))
     else:
         missing.append("out/latest.html（先跑 python3 main.py）")
@@ -88,7 +171,7 @@ def build():
     if os.path.exists(src):
         html = open(src, encoding="utf-8").read()
         with open(os.path.join(DOCS, "asym.html"), "w", encoding="utf-8") as f:
-            f.write(_inject(html, "asym"))
+            f.write(_inject(html, "asym", as_of=_extract_date(html), days=_snap_dates()))
         built.append(("asym.html", len(html)))
     else:
         missing.append("asym/out.html（先跑 python3 asym/asym_render.py）")
@@ -98,7 +181,7 @@ def build():
     if os.path.exists(src):
         html = open(src, encoding="utf-8").read()
         with open(os.path.join(DOCS, "explain.html"), "w", encoding="utf-8") as f:
-            f.write(_inject(html, "explain"))
+            f.write(_inject(html, "explain", as_of=_extract_date(html), days=_snap_dates()))
         built.append(("explain.html", len(html)))
     else:
         missing.append("explain/out.html（先跑 python3 explain/explain_render.py）")
@@ -117,29 +200,111 @@ def build():
             shutil.copy2(s, os.path.join(arch_dir, f"{d}.html"))
             copied += 1
 
-    # ⑤ 归档索引
-    if copied:
-        rows = "".join(
-            f'<li><a href="archive/{d}.html">{d}</a></li>'
-            for d in reversed(snaps[-ARCHIVE_KEEP:])
-            if os.path.exists(os.path.join(arch_dir, f"{d}.html")))
-        idx = (
-            '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<title>历史归档</title>'
-            '<style>body{background:#080b11;color:#c9d3e0;font:14px/1.7 '
-            '-apple-system,"PingFang SC",sans-serif;padding:24px;max-width:760px;margin:0 auto}'
-            'a{color:#7ea8f0;text-decoration:none}a:hover{text-decoration:underline}'
-            'h1{font-size:18px;margin-bottom:16px;color:#e8eef7}'
-            'li{margin:5px 0}</style></head><body>'
-            f'<h1>历史归档（最近 {copied} 个交易日）</h1>'
-            f'<ul>{rows}</ul>'
-            '<p style="color:#6b7688;font-size:12px;margin-top:24px">'
-            '每个文件是当日收盘后的完整快照，可离线打开。</p>'
-            '</body></html>')
-        with open(os.path.join(DOCS, "archive", "index.html"), "w", encoding="utf-8") as f:
-            f.write(idx)
-        built.append(("archive/index.html", len(idx)))
+    # ⑤ 归档索引（用 bars.jsonl 做有信息量的列表，而非裸链接）
+    try:
+        import bars as _bars
+        _rows = _bars.load()
+    except Exception:  # noqa: BLE001
+        _rows = []
+    _rows = [r for r in _rows if r.get("date")]
+    _rows.sort(key=lambda r: r.get("date") or "", reverse=True)
+
+    # 统计趋势所需
+    _full = [r for r in _rows if not r.get("partial")]
+    _part = [r for r in _rows if r.get("partial")]
+
+    def _regime_color(lbl):
+        return {"进攻": "#f6465d", "防守": "#0ecb81",
+                "震荡": "#f0a020", "风险": "#c0392b"}.get(lbl or "", "#8b96a8")
+
+    trs = []
+    for r in _rows:
+        d = r.get("date")
+        has_page = os.path.exists(os.path.join(arch_dir, f"{d}.html"))
+        partial = bool(r.get("partial"))
+        reg = r.get("regime") or ("—" if partial else "—")
+        rc = _regime_color(reg)
+        if partial:
+            # 板块级：只能给板块涨跌数与净额
+            cells = (f'<td class="num">{r.get("boards_up", "—")}</td>'
+                     f'<td class="num">{r.get("boards_down", "—")}</td>'
+                     f'<td class="num">—</td>'
+                     f'<td class="num">—</td>'
+                     f'<td class="num">{r.get("main_net_yi", 0):+.0f}</td>')
+            name_cell = (f'<td><span class="pdot"></span>{d}</td>'
+                         if not has_page else f'<td>{d}</td>')
+            tag = '<span class="tagp">板块级</span>'
+        else:
+            up = r.get("up"); dn = r.get("down")
+            amt = r.get("amount_yi")
+            net = r.get("main_net_yi")
+            cells = (f'<td class="num up">{up:,}</td>' if up else '<td class="num">—</td>')
+            cells += (f'<td class="num down">{dn:,}</td>' if dn else '<td class="num">—</td>')
+            cells += (f'<td class="num">{amt/10000:.2f}万亿</td>' if amt else '<td class="num">—</td>')
+            cells += (f'<td class="num">{r.get("limit_up", "—")}/{r.get("limit_down", "—")}</td>')
+            cells += (f'<td class="num" style="color:{"#f6465d" if (net or 0) > 0 else "#0ecb81"}">'
+                      f'{net:+.0f}</td>' if net is not None else '<td class="num">—</td>')
+            name_cell = (f'<td><a href="archive/{d}.html">{d}</a></td>'
+                         if has_page else f'<td>{d}</td>')
+            tag = ""
+
+        trs.append(
+            '<tr>' + name_cell +
+            f'<td style="color:{rc};font-weight:650">{reg}</td>' +
+            cells +
+            f'<td class="tg">{tag}</td></tr>')
+
+    rows_html = "".join(trs)
+    idx = (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>历史归档</title><style>'
+        'body{background:#080b11;color:#c9d3e0;font:13px/1.7 -apple-system,'
+        '"PingFang SC",sans-serif;padding:22px 16px 40px}'
+        '.wrap{max-width:960px;margin:0 auto}'
+        'h1{font-size:19px;color:#e8eef7;margin-bottom:6px}'
+        '.sub{font-size:12.5px;color:#6b7688;margin-bottom:18px;line-height:1.8}'
+        'table{width:100%;border-collapse:collapse;font-size:12.5px}'
+        'th{text-align:left;color:#6b7688;font-weight:500;font-size:11.5px;'
+        'padding:8px 8px;border-bottom:1px solid #222b3a;letter-spacing:.3px}'
+        'td{padding:8px;border-bottom:1px solid rgba(255,255,255,.045)}'
+        'td.num{text-align:right;font-variant-numeric:tabular-nums}'
+        '.up{color:#f6465d}.down{color:#0ecb81}'
+        'a{color:#7ea8f0;text-decoration:none}a:hover{text-decoration:underline}'
+        '.tagp{font-size:10.5px;color:#6b7688;background:rgba(255,255,255,.04);'
+        'border:1px solid #222b3a;border-radius:5px;padding:1px 6px}'
+        '.pdot{display:inline-block;width:5px;height:5px;border-radius:50%;'
+        'background:#3a4557;margin-right:6px;vertical-align:middle}'
+        '.note{margin-top:18px;padding:13px 16px;border-left:3px solid #2a3346;'
+        'background:rgba(255,255,255,.02);border-radius:0 8px 8px 0;'
+        'font-size:12px;color:#8792a4;line-height:1.85}'
+        '.note b{color:#a8b3c4}'
+        '</style></head><body><div class="wrap">'
+        f'<h1>历史归档</h1>'
+        f'<div class="sub">共 {len(_rows)} 个交易日 · '
+        f'{len(_full)} 天有完整市场数据，{len(_part)} 天仅板块级</div>'
+        '<table><thead><tr>'
+        '<th>交易日</th><th>状态</th>'
+        '<th>涨(个)</th><th>跌(个)</th>'
+        '<th>成交额</th><th>涨停/跌停</th><th>主力净额(亿)</th><th></th>'
+        '</tr></thead><tbody>' + rows_html + '</tbody></table>'
+        '<div class="note">'
+        '<b>怎么看这张表</b><br>'
+        '· 点击日期可打开当天的完整页面（带图表的归档）。<br>'
+        '· 标「板块级」的日期没有个股宽度数据——那些天的全市场涨跌家数、'
+        '涨停池无法从接口回溯，只能保留板块净额与板块涨跌数。<br>'
+        '· 注意列含义随行变化：<b>有完整数据的日子，"涨/跌"是个股家数</b>；'
+        '<b>标「板块级」的日子，"涨/跌"是板块个数</b>（约 496 个板块中多少个涨）。'
+        '两者不能直接比较。<br>'
+        '<b>为什么日期不全</b>：数据从 2026-09-15 才开始留存。'
+        '接口本身只保留滚动 120 个交易日，更早的数据已无法取回。<br>'
+        '<b>关于 11-02 / 11-03</b>：这两天因宽度数据错误已被移除'
+        '（11-02 实际是上涨日却被记录成跌多涨少），宁缺不留错。'
+        '</div></div></body></html>')
+
+    with open(os.path.join(arch_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(idx)
+    built.append(("archive/index.html", len(idx)))
 
     # ⑥ 禁用 Jekyll（避免下划线文件被忽略）
     with open(os.path.join(DOCS, ".nojekyll"), "w") as f:

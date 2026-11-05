@@ -437,6 +437,34 @@ def main():
         traceback.print_exc()
         check("资金主线识别", False, f"{type(e).__name__}: {e}")
 
+    section("3.8 可用性：日期可见性与历史入口")
+
+    # 核心风险：用户打开页面看不出「这是哪天的」，也找不到历史。
+    # 股票数据差一天结论可能相反，日期必须一眼可见。
+    try:
+        import build_site as _bs
+        _html = _bs._inject("<html><body><h1>x</h1></body></html>",
+                            "flow", as_of="2026-01-02", days=["2026-01-02"])
+        check("导航条显示日期徽章", "datebadge" in _html and "2026-01-02" in _html,
+              "日期徽章存在")
+        check("导航条有历史入口", "archive/" in _html and "历史归档" in _html,
+              "历史入口存在")
+        # 新鲜度提示：过期数据必须提示
+        _old = _bs._inject("<html><body>x</body></html>", "flow",
+                           as_of="2020-01-01", days=[])
+        check("过期数据有新鲜度提示",
+              "新鲜度" in _old or "天前" in _old,
+              "已提示数据过期")
+        # 当天数据不该有误导性警示
+        _today = __import__("datetime").date.today().strftime("%Y-%m-%d")
+        _cur = _bs._inject("<html><body>x</body></html>", "flow",
+                           as_of=_today, days=["x"])
+        check("当天数据不显示过期提示", "天前" not in _cur, "当日无多余警示")
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        check("可用性修复", False, f"{type(e).__name__}: {e}")
+
     section("4. 渲染层")
 
     try:
