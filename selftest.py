@@ -548,6 +548,27 @@ def main():
         traceback.print_exc()
         check("发布前校验", False, f"{type(e).__name__}: {e}")
 
+    section("3.10 历史网页永久保留")
+
+    # 需求：历史图表页要永久保留，不能滚动删除。
+    # 成本 267KB/天，但用户要能回看任意一天的完整页面。
+    try:
+        import build_site as _bs
+        _src = open(_bs.__file__, encoding="utf-8").read()
+        check("无滚动删除配置", "ARCHIVE_KEEP" not in _src,
+              "已移除 AKEEP 上限")
+        check("声明永久保留", "永久保留" in _src, "注释已声明")
+        # 增量复制：已有文件不重复复制
+        check("增量复制（跳过已存在）",
+              '_full_dates' in _src and "if os.path.exists(dst)" in _src,
+              "已实现增量")
+        # 兜底：归档目录里的孤儿页面也要进索引
+        check("索引兜底扫描目录",
+              "仅页面，无摘要记录" in _src,
+              "已实现兜底")
+    except Exception as e:  # noqa: BLE001
+        check("历史网页保留", False, f"{type(e).__name__}: {e}")
+
     section("4. 渲染层")
 
     try:

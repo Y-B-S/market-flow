@@ -25,7 +25,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 DOCS = os.path.join(HERE, "docs")
-ARCHIVE_KEEP = 30
+# 历史网页保留策略：**永久保留**所有完整图表页。
+#
+# 成本：约 267KB/天 → 一年 65MB、十年 652MB（未压缩）。
+# 收益：任何一天都能点开当时完整的页面（treemap / 板块排名 / 个股榜单）。
+#
+# 注意：历史页面写入后不再改动（只增不减），所以每次构建只复制**新增**的，
+# 不重复复制旧的 —— 否则每次构建都要重写所有历史文件，天数一多会很慢。
 
 
 def _nav(active, as_of=None, days=None):
@@ -194,11 +200,21 @@ def build():
                        if x.endswith(".json") and x[:4].isdigit())
     arch_dir = os.path.join(DOCS, "archive")
     copied = 0
-    for d in snaps[-ARCHIVE_KEEP:]:
-        s = os.path.join(HERE, "out", f"flow-{d}.html")
-        if os.path.exists(s):
-            shutil.copy2(s, os.path.join(arch_dir, f"{d}.html"))
-            copied += 1
+    kept = 0
+    # 永久保留：遍历所有有完整数据的日期，但只复制**尚不存在**的页面
+    # （历史页面内容不随新数据变化，重复复制只会浪费时间与 IO）
+    _full_dates = []
+    for d in snaps:
+        src_p = os.path.join(HERE, "out", f"flow-{d}.html")
+        if not os.path.exists(src_p):
+            continue
+        _full_dates.append(d)
+        dst = os.path.join(arch_dir, f"{d}.html")
+        if os.path.exists(dst):
+            kept += 1
+            continue
+        shutil.copy2(src_p, dst)
+        copied += 1
 
     # ⑤ 归档索引（用 bars.jsonl 做有信息量的列表，而非裸链接）
     try:
@@ -207,6 +223,17 @@ def build():
     except Exception:  # noqa: BLE001
         _rows = []
     _rows = [r for r in _rows if r.get("date")]
+
+    # 兜底：归档目录里实际存在的页面，若 bars 里没有对应记录，
+    # 也要补一行 —— 否则历史页还在但索引里找不到它。
+    _by_date = {r["date"]: r for r in _rows}
+    for fn in sorted(os.listdir(arch_dir)):
+        if not (fn.endswith(".html") and fn[:4].isdigit()):
+            continue
+        d = fn[:-5]
+        if d not in _by_date:
+            _rows.append({"date": d, "note": "仅页面，无摘要记录"})
+            _by_date[d] = _rows[-1]
     _rows.sort(key=lambda r: r.get("date") or "", reverse=True)
 
     # 统计趋势所需
