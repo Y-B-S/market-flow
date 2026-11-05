@@ -465,6 +465,59 @@ def main():
         traceback.print_exc()
         check("可用性修复", False, f"{type(e).__name__}: {e}")
 
+    section("3.9 发布前校验")
+
+    # 核心风险：自动推送会把错误数据直接发到线上（11-02 就是这样上去的）。
+    # 校验必须能拦住那类错误，又不能误伤正常数据。
+    try:
+        import validate_publish as _vp
+        _good = json.load(open(os.path.join(BASE, "data", "2026-11-04.json"),
+                              encoding="utf-8"))
+        _a = metrics.compute(_good)
+        _r = _vp.validate(_good, _a)
+        check("正常数据通过校验", _r.passed,
+              f"{len(_r.checks)} 项检查")
+
+        # 复现 11-02 的错误：上证涨 +1.08%，但涨跌家数是 2108/3309（跌多涨少）
+        _bad = {
+            "as_of": "2026-11-02",
+            "breadth": {"count": 5927, "valid": 5572, "up": 2108,
+                        "down": 3309, "flat": 155, "limit_up": 48,
+                        "limit_down": 17,
+                        "amount_total": 1501234567890.0,
+                        "main_net_total": -57400000000.0},
+            "indices": [{"name": "上证指数", "chg": 1.08}],
+            "consistency": {"diff_pct": 0.68},
+        }
+        _rb = _vp.validate(_bad, {})
+        check("能拦住「指数涨但跌多涨少」错位", not _rb.passed,
+              f"拦截: {[n for n,_ in _rb.blocks]}")
+
+        # 成交额整数填充值
+        _bad2 = dict(_bad)
+        _bad2["breadth"] = dict(_bad["breadth"])
+        _bad2["breadth"]["amount_total"] = 1500000000000.0
+        _r2 = _vp.validate(_bad2, {})
+        check("能拦住成交额整数填充值", not _r2.passed,
+              f"拦截: {[n for n,_ in _r2.blocks]}")
+
+        # 涨跌平不等于有效数
+        _bad3 = {
+            "as_of": "2026-11-04",
+            "breadth": {"count": 5927, "valid": 5000, "up": 2000,
+                        "down": 2000, "flat": 500,
+                        "amount_total": 2000000000000.0, "limit_up": 50,
+                        "limit_down": 5},
+            "indices": [{"name": "上证指数", "chg": 0.5}],
+        }
+        _r3 = _vp.validate(_bad3, {})
+        check("能拦住涨跌平与有效数不一致", not _r3.passed,
+              f"拦截: {[n for n,_ in _r3.blocks]}")
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        check("发布前校验", False, f"{type(e).__name__}: {e}")
+
     section("4. 渲染层")
 
     try:
