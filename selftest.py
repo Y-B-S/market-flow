@@ -317,14 +317,23 @@ def main():
                 check("空盘横幅渲染", False, f"{type(_e).__name__}")
         else:
             # 交易时段：不应误报空盘
-            check("有行情时未误报空盘",
-                  tstate in ("trading", "in_session", "closed_settled"),
+            # ⚠️ 不能依赖"现在是交易时段"——测试可能在凌晨/周末跑，
+            # 那时 pre_market_or_closed 是正确的。应断言状态取值合法且与有效占比自洽。
+            check("状态取值合法",
+                  tstate in ("trading", "in_session", "closed_settled",
+                             "pre_market_or_closed"),
                   f"trading_state={tstate}, 有效占比={valid_ratio:.1%}")
             try:
                 import render_html as _rh
                 _al = metrics.compute(snap_live)
                 _h = _rh.render_html(_al, snap_live)
-                check("交易时段无空盘横幅", "非交易时段" not in _h)
+                # 横幅逻辑自洽：只在 pre_market_or_closed 时出现。
+                # 不能断言"一定没有横幅"——测试可能凌晨/周末跑，
+                # 那时出现横幅是正确的。
+                _has_banner = "非交易时段" in _h
+                _expect = tstate == "pre_market_or_closed"
+                check("空盘横幅与状态一致", _has_banner == _expect,
+                      f"state={tstate} 横幅={_has_banner}")
             except Exception:  # noqa: BLE001
                 pass
     except Exception as e:  # noqa: BLE001
@@ -399,9 +408,16 @@ def main():
         if _snap:
             _a = metrics.compute(_snap)
             _res = _ml.detect(_a, _snap)
-            check("资金主线可识别", _res.get("available"),
-                  f"{len(_res.get('lines') or [])} 条主线")
+            # ⚠️ 不能断言"必须识别出主线"——普跌日资金分散流出，
+            # 确实可能没有任何板块形成同步流入的簇（实测 11-06 就是 0 条）。
+            # 应断言的是"判定逻辑自洽"：有主线则检查结构，无主线则必须给出原因。
             _lines = _res.get("lines") or []
+            if _lines:
+                check("资金主线可识别", True, f"{len(_lines)} 条主线")
+            else:
+                check("无主线时给出原因",
+                      any("未发现" in str(x) for x in (_res.get("limitations") or [])),
+                      "已说明原因")
             if _lines:
                 _top = _lines[0]
                 check("主线含成员明细", len(_top.get("members") or []) >= 3,

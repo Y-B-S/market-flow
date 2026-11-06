@@ -1044,7 +1044,7 @@ _REGIME_PLAIN = {
 }
 
 
-def _plain_verdict(analysis):
+def _plain_verdict(analysis, snapshot=None):
     """生成一句不用术语的结论。返回 (标题, 正文, 建议, 颜色)。"""
     b = _d(analysis, "breadth_block") or {}
     reg = _d(analysis, "regime")
@@ -1089,6 +1089,12 @@ def _plain_verdict(analysis):
         else:
             parts.append(f"大资金今天净卖出 {abs(yi):.0f} 亿，跑得比较急")
 
+    # 跌停池缺失时不要把 0 当真值——会读成"一个跌停都没有"
+    try:
+        if snapshot is not None and not _pool_ok(snapshot, "down"):
+            ld = None
+    except Exception:  # noqa: BLE001
+        pass
     if lu is not None and ld is not None and lu >= 50:
         parts.append(f"涨停 {int(lu)} 家，跌停 {int(ld)} 家——"
                      f"{'赚钱机会明显多一些' if lu > ld * 3 else '多空还有点拉锯'}")
@@ -1116,7 +1122,7 @@ def _p0_plain(analysis, snapshot):
     if not isinstance(analysis, dict) or analysis.get("empty_state"):
         return ""
     try:
-        title, body, advice, color, extra = _plain_verdict(analysis)
+        title, body, advice, color, extra = _plain_verdict(analysis, snapshot)
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1205,6 +1211,23 @@ def _mainline_block(analysis):
 
 
 # ---- 面板 1：顶部状态条
+def _pool_ok(snapshot, kind):
+    """判断涨停/跌停池数据是否可信。
+
+    ⚠️ 实测故障：2026-11-05 交易所跌停池返回空，record 里跌停=0，
+    但粗略阈值统计约 5 家。直接显示「跌停 0」会被读成"一个跌停都没有"，
+    进而算出畸高的涨停/跌停比值（84:1），严重误导。
+
+    判据：池计数为 0 但粗略统计 ≥3 → 视为数据缺失，返回 False。
+    """
+    b = (snapshot or {}).get("breadth") or {}
+    pool_n = _num(b.get(f"limit_{kind}"))
+    naive_n = _num(b.get(f"limit_{kind}_naive"))
+    if pool_n == 0 and naive_n is not None and naive_n >= 3:
+        return False
+    return True
+
+
 def _p1(analysis, snapshot):
     as_of = _text(_d(analysis, "as_of") or _d(snapshot, "as_of"), DASH)
     gen = _text(_d(snapshot, "generated_at"), DASH)
@@ -1388,11 +1411,16 @@ def _p2(analysis, snapshot):
         _tile("上涨 / 下跌", "%s / %s" % (fmt_int(up), fmt_int(down)), _cls(win and (win - 50))),
         _tile("赚钱效应（上涨占比）", ("%.1f%%" % win) if win is not None else DASH,
               _cls(win - 50 if win is not None else None)),
-        _tile("涨停 / 跌停", "%s / %s" % (fmt_int(lu), fmt_int(ld)),
+        _tile("涨停 / 跌停",
+              ("%s / %s" % (fmt_int(lu), fmt_int(ld)))
+              if _pool_ok(snapshot, "down") else
+              ("%s / %s" % (fmt_int(lu), DASH)),
               "up" if (lu or 0) > (ld or 0) else "down",
-              ("空盘状态·上一交易日残值"
-               if _text(_d(snapshot, "trading_state"), "trading") != "trading"
-               else "交易所涨停池")),
+              ("跌停池接口返回空，跌停数不可信"
+               if not _pool_ok(snapshot, "down") else
+               ("空盘状态·上一交易日残值"
+                if _text(_d(snapshot, "trading_state"), "trading") != "trading"
+                else "交易所涨停池"))),
         _tile("有效样本", fmt_int(cnt), "", "含停牌 %s 只" % fmt_int(_num(b.get("suspended")))),
     ])
 

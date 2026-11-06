@@ -131,6 +131,34 @@ def validate(snapshot, analysis=None):
         else:
             r.ok("涨跌停数量合理", f"涨停{int(lu)}/跌停{int(ld)}")
 
+    # ── 涨跌停池数据缺失检测（静默故障）────────────────────────────
+    #
+    # 实测案例：2026-11-05 交易所跌停池返回空，记录"跌停 0 家"，
+    # 但按 ±N% 阈值粗算约有 5 家跌停 —— 池数据缺失被记成了"0 家跌停"。
+    # 这种错误很危险：跌停 0 会被读成"市场极强"，实际是接口没返回。
+    _lu_naive = _n(b.get("limit_up_naive"))
+    _ld_naive = _n(b.get("limit_down_naive"))
+    _lu_pool = s.get("limit_up_pool")
+    _ld_pool = s.get("limit_down_pool")
+    if ld is not None and ld == 0 and _ld_naive is not None and _ld_naive >= 3:
+        # 升级为阻塞：跌停 0 会被读成"市场极强"（涨停/跌停比值畸高），
+        # 实际是接口没返回。这种静默错误比缺失更危险，不该发到线上。
+        r.block("跌停池数据缺失",
+                f"交易所池记录跌停 0 家，但粗略阈值统计有 {int(_ld_naive)} 家——"
+                f"跌停池接口返回空。若发布，页面会显示「跌停 0」"
+                f"并算出畸高的涨停/跌停比值，严重误导")
+    if lu is not None and lu == 0 and _lu_naive is not None and _lu_naive >= 3:
+        r.warn("涨停池疑似缺失",
+               f"交易所池记录涨停 0 家，但粗略阈值统计有 {int(_lu_naive)} 家——"
+               f"疑似涨停池接口返回空")
+    # 池记录条数与计数不符
+    if _ld_pool is not None and ld is not None and len(_ld_pool) != int(ld):
+        r.warn("跌停池明细与计数不符",
+               f"池记录 {len(_ld_pool)} 条但计数为 {int(ld)}")
+    if _lu_pool is not None and lu is not None and len(_lu_pool) != int(lu):
+        r.warn("涨停池明细与计数不符",
+               f"池记录 {len(_lu_pool)} 条但计数为 {int(lu)}")
+
     # ── 4. 与指数交叉验证（关键：能抓出 11-02 那类错误）─────────────
     #
     # 逻辑：上证指数涨跌方向应与「涨跌家数占优方向」大体一致。
